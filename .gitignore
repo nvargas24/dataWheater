@@ -1,0 +1,11 @@
+# Ignorar carpetas de caché de Python
+__pycache__/
+
+# Ignorar todos los archivos pdf
+*.pdf
+
+# Ignorar credenciales
+*.conf
+
+# Ignorar almacenamiento parquet
+*.parquet
