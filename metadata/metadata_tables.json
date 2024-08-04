@@ -1,0 +1,53 @@
+{
+    "clima_v1": {
+        "id": {
+            "type": "INTEGER",
+            "nullable": false,
+            "default": null,
+            "primary_key": true,
+            "references": ""
+        },
+        "localidad": {
+            "type": "VARCHAR(255)",
+            "nullable": true,
+            "default": null,
+            "primary_key": false,
+            "references": ""
+        },
+        "time_solicitud": {
+            "type": "TIMESTAMP",
+            "nullable": true,
+            "default": null,
+            "primary_key": false,
+            "references": ""
+        },
+        "time_update": {
+            "type": "TIMESTAMP",
+            "nullable": true,
+            "default": null,
+            "primary_key": false,
+            "references": ""
+        },
+        "temperatura": {
+            "type": "DOUBLE PRECISION",
+            "nullable": true,
+            "default": null,
+            "primary_key": false,
+            "references": ""
+        },
+        "humedad": {
+            "type": "DOUBLE PRECISION",
+            "nullable": true,
+            "default": null,
+            "primary_key": false,
+            "references": ""
+        },
+        "condicion_climatica": {
+            "type": "VARCHAR(255)",
+            "nullable": true,
+            "default": null,
+            "primary_key": false,
+            "references": ""
+        }
+    }
+}
