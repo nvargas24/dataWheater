@@ -1,6 +1,6 @@
 {
-    "clima_v1": {
-        "incremental_column": "time_solicitud",
-        "last_value": "2024-06-12 21:34:00"
+    "clima_v3": {
+        "incremental_column": "current.last_updated",
+        "last_value": "2024-06-22 23:00:00"
     }
 }
