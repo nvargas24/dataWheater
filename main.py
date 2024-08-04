@@ -15,7 +15,7 @@ __author__ = "Nahuel Vargas"
 __maintainer__ = "Nahuel Vargas"
 __email__ = "nahuvargas24@gmail.com"
 __copyright__ = "Copyright 2024"
-__version__ = "0.0.1"
+__version__ = "0.0.2"
 
 # Librerias
 import requests
@@ -51,6 +51,10 @@ locations = [
     "Ciudadela, Buenos Aires",
     "Lomas del Mirador, Buenos Aires"
 ]
+
+# Nombres de tablas
+tabla_incremental = "clima_v2_incremental"
+tabla_full = "clima_v2_full"
 
 # ----- Funciones para obtener datos de API ------ #
 def get_data(base_url, endpoint, params=None, headers=None):
@@ -110,7 +114,6 @@ def access_API(access_token, endpoint, location):
     :return json_data: .json de rta a solicitud a API
     """
     base_url = "http://api.weatherapi.com/v1" # Se actualiza cada 15min
-    #location = "Castelar, Buenos Aires" # ejemplo
     params ={
         "q": location,
     }
@@ -137,20 +140,16 @@ def multi_query(access_token):
     for location in locations:
         # Acceso a API - consulto por localidades cercanas
         json_data_meas = access_API(access_token, CLIMA_ACTUAL, location)
-        json_data_location = access_API(access_token, UBICACION, location)
 
         # Combino diccionarios para ver todos los datos dinamicos relevantes
         data_meas = json_data_meas["current"]
         data_meas_aux = json_data_meas["location"]
         data_meas = data_meas | data_meas_aux
 
-        data_location = json_data_location[0]
-
         # Armo lista de diccionario de la distintas localidades consultadas
         data_api_meas.append(data_meas)
-        data_api_location.append(data_location)
-    
-    return data_api_meas, data_api_location
+
+    return data_api_meas
 
 # ----- Funciones para optimizar registro de datos   ------ #
 def save_to_parquet(df, output_path, partition_cols=None):
@@ -191,18 +190,12 @@ def read_data():
     return df_measure
 
 # ----- Funciones para interactuar con base de datos ------ #
-def load_to_db(engine, df_measure):
-    """
-    Carga de dataframe a base de datos
-    :param engine: cursor de conexion a base de datos
-    :param df_measure: dataframe a cargar
-    """
-
+def create_table_db(engine, name_table):
     # **** NOTA : Cuidado con las mayusculas y minusculas ****
     # Defino esquema de tabla para base de datos
-    query = text("""
+    query = text(f"""
     -- Creamos una tabla sobre datos 
-    CREATE TABLE IF NOT EXISTS public.clima_v1 (
+    CREATE TABLE IF NOT EXISTS public.{name_table} (
         id SERIAL PRIMARY KEY,
         localidad VARCHAR(255),
         time_solicitud TIMESTAMP,
@@ -216,11 +209,18 @@ def load_to_db(engine, df_measure):
     with engine.connect() as conn, conn.begin():
         conn.execute(query)
 
+def load_to_db(engine, df_measure, name_table):
+    """
+    Carga de dataframe a base de datos
+    :param engine: cursor de conexion a base de datos
+    :param df_measure: dataframe a cargar
+    :param name_table: nombre de tabla a cargar los datos
+    """
     # Carga de dataframe en base de datos
     try:
         with engine.connect() as conn, conn.begin():
             df_measure.to_sql(
-                "clima_v1",
+                f"{name_table}",
                 schema="public",
                 con=conn,
                 if_exists="append", # opcionse: "replace" o "append"
@@ -234,11 +234,9 @@ def load_to_db(engine, df_measure):
 # Obtengo contraseña
 access_token = get_token()
 # Consulto por varias localidades cercanas
-data_api_meas, data_api_location = multi_query(access_token)
-
+data_api_meas = multi_query(access_token)
 # Normalizo en formato de dataframes
 df_meas = build_table(data_api_meas)
-df_location= build_table(data_api_location)
 
 # Convierto en formato de datetime columnas de fecha y hora
 df_meas["last_updated"] = pd.to_datetime(df_meas.last_updated)
@@ -248,17 +246,12 @@ df_meas["localtime"] = pd.to_datetime(df_meas.localtime)
 df_meas["last_update_date"] = df_meas.last_updated.dt.date
 df_meas["last_update_hour"] = df_meas.last_updated.dt.hour
 
+# ALMACENAMIENTO PARQUET
 # Guardo en formato Parquet
 save_to_parquet(
     df=df_meas,
     output_path=f"{dir_bronze}/measures/data.parquet",
     partition_cols=["last_update_date", "last_update_hour"]
-    )
-
-save_to_parquet(
-    df=df_location,
-    output_path=f"{dir_bronze}/location/",
-    partition_cols=["lat", "lon"]
     )
 
 # Lectura de archivos parquet con datos dinamicos cada 15min a partir de la 00:00:00
@@ -269,13 +262,6 @@ correccion_arg = timedelta(hours=3)
 start_datetime = datetime.utcnow() - correccion_arg - timedelta(minutes=10)
 df_measure = df_measure[df_measure['time_update'] >= start_datetime]
 
-# Acceso a base de datos postgre
-engine = connect_to_db(
-    "pipeline.conf",
-    "postgres",
-    "postgresql+psycopg2"
-    )
-
 # Fuerzo nulo para probar algunos metodos
 df_measure.loc[df_measure['localidad'] == 'Castelar', 'temperatura'] = np.nan
 df_measure.loc[df_measure['localidad'] == 'Hurlingham', 'temperatura'] = np.nan
@@ -283,13 +269,26 @@ df_measure.loc[df_measure['localidad'] == 'Hurlingham', 'temperatura'] = np.nan
 # Dataframe a cargar en base de datos
 print("Dataframe a cargar en BD:")
 print(df_measure)
-# Carga de Dataframe a base de datos
-load_to_db(engine, df_measure)
+print(df_measure.info(memory_usage='deep'))
 
-# Test consulta a base de datos
-query = text("""
+
+# Acceso a base de datos postgre
+engine = connect_to_db(
+    "pipeline.conf",
+    "postgres",
+    "postgresql+psycopg2"
+    )
+
+# CARGA EN BASE DE DATOS FULL
+# Creo esquema de tabla  - solo se crea si no existe
+create_table_db(engine, f"{tabla_full}")
+# Carga de Dataframe a base de datos FULL
+load_to_db(engine, df_measure, f"{tabla_full}")
+
+# EXTRACCION FULL
+query = text(f"""
 SELECT *
-FROM public.clima_v1
+FROM public.{tabla_full}
 """)
 
 with engine.connect() as conn, conn.begin():
@@ -297,28 +296,35 @@ with engine.connect() as conn, conn.begin():
 
 print("Dataframe leido de la base datos:")
 print(df_measure_check)
-
-# Chequeo info del dataframe cargado y el leido en la base de datos
-print("Info de Dataframe que se carga a base de datos y el leido: ")
-print(df_measure.info(memory_usage='deep'))
 print(df_measure_check.info(memory_usage='deep'))
 
+# TRANSFORMACION
 # Manejo de nulos
 print("Total datos nulos en 'temperatura': ", 
     df_measure_check.temperatura.isnull().sum())
 
-
-# Extraccion en modo incremental
+# EXTRACCION INCREMENTAL
 ## Actualizo fecha de ultima actualizacion 
 get_metadata_db(engine)
 ## Obtengo de la base de datos aquellos que sean de una fecha superior
 ## a la leida en el archivo metadata --- se utiliza el campo 'time_solicitud'
 ## para comparar las fechas
 df_measure_update = extract_incremental_data(
-    engine, 'clima_v1', 'metadata/metadata_ingestion.json'
+    engine, f'{tabla_full}', 'metadata/metadata_ingestion.json'
     )
+
 print("Dataframe obtenido incremental")
 print(df_measure_update)
+
+# CARGA EN BASE DE DATOS INCREMETAL
+# Creo tabla para datos incrementales
+create_table_db(engine, f"{tabla_full}")
+# Leo base de datos para saber que datos tengo
+# Comparo datos leidos con los obtenidos de la extraccion incremental -- dataframe
+# Si algun campo cambio se actualiza y si no existe se agrega - teniendo en cuenta el campos de referencia (localidad) -- dataframe
+# Del nuevo dataframe obtenido se carga a base de datos
+# Carga de Dataframe a base de datos INCREMETAL
+load_to_db(engine, df_measure_update, f"{tabla_incremental}")
 
 df_measure_fin = df_measure.copy()
 # Solo actualizo si hay algun cambio
@@ -335,5 +341,6 @@ if not df_measure_update.empty:
 
 print("Dataframe final con datos actualizados:")
 print(df_measure_fin)
+
 
 # OBS.: Falta agregar rta cuando no se obtiene valores de API
